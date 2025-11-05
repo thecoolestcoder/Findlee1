@@ -1,0 +1,33 @@
+/* styles.css */
+
+/* Import Tailwind's directives */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The custom dark mode prose styling defined in tailwind.config.js */
+.dark-mode-prose :where(.comparison-layout > p, .comparison-layout > div) {
+  color: var(--tw-prose-body) !important;
+}
+
+/* Ensure product cards use the animation utility with an incremental delay */
+.product-card {
+    opacity: 0; /* Hidden by default */
+}
+
+/* Apply a slight delay to each card for the cascade effect */
+.comparison-layout > div:nth-child(1) {
+    animation-delay: 0.1s;
+}
+.comparison-layout > div:nth-child(2) {
+    animation-delay: 0.2s;
+}
+.comparison-layout > div:nth-child(3) {
+    animation-delay: 0.3s;
+}
+/* Extend this pattern as needed for more products/sections */
+
+/* Ensure the utility classes for the panels are available */
+.sub-section-panel ul li span strong {
+    font-weight: 700 !important;
+}
