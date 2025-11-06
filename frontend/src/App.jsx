@@ -1,33 +1,43 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, ShoppingCart, TrendingUp, Shield, Zap, Filter, X, Star, Package, ExternalLink, ArrowRight, ShoppingBag, Moon, Sun, Trash2, Plus, Minus } from 'lucide-react';
 import { SignedIn, SignedOut, SignInButton, UserButton } from '@clerk/clerk-react'
+import { useQuery, useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+import { useUser } from '@clerk/clerk-react';
 
 // =======================================================
-// 🛑 N8N INTEGRATION CONSTANTS: CONFIGURE THESE
+// 🛒 CONFIGURATION CONSTANTS
 // =======================================================
-// 1. N8N Webhook URL (from n8n Step 1 Webhook Node)
-const N8N_WEBHOOK_URL = 'http://localhost:5678/webhook/checkout-trigger'; // <-- REPLACE WITH YOUR ACTUAL N8N WEBHOOK URL
+const API_URL = import.meta.env.REACT_APP_API_URL || 'http://localhost:4000/api';
 
-// 2. Placeholder User Data (Used by the n8n workflow for shipping)
-// Placeholder name set as requested: Adhyayan Kumar
 const PLACEHOLDER_USER_DATA = {
-  name: 'Adhyayan Kumar', // <-- Placeholder name for shipping forms
+  name: 'Adhyayan Kumar',
   addressLine1: 'Flat 401, Sai Towers, Whitefield Main Road',
-  zipCode: '560066', // Bangalore, Karnataka, India
+  zipCode: '560066',
   country: 'India'
 };
 // =======================================================
 
 const ShopMate = () => {
+  const { isSignedIn, user } = useUser();
+  const cartData = useQuery(api.cart.getCart);
+  const addItemMutation = useMutation(api.cart.addItem);
+  const removeItemMutation = useMutation(api.cart.removeItem);
+  const updateQuantityMutation = useMutation(api.cart.updateQuantity);
+  const clearCartMutation = useMutation(api.cart.clearCart);
   const [query, setQuery] = useState('');
   const [products, setProducts] = useState([]);
   const [summary, setSummary] = useState('');
   const [loading, setLoading] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
-  const [cart, setCart] = useState([]);
-  const [showCart, setShowCart] = useState(false);
+   const [showCart, setShowCart] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [cartLoaded, setCartLoaded] = useState(false);
+
+  
+  // Get cart from Convex
+  const cart = cartData?.items || [];
   const [filters, setFilters] = useState({
     minPrice: 0,
     maxPrice: 100000,
@@ -35,7 +45,41 @@ const ShopMate = () => {
     category: 'all',
     dealsOnly: false,
     sort: 'relevance'
-  });
+  })
+  ;
+
+  // ✅ Load cart from storage on mount
+  useEffect(() => {
+    const loadCart = async () => {
+      try {
+        const result = await window.storage.get('shopping-cart');
+        if (result && result.value) {
+          const savedCart = JSON.parse(result.value);
+          setCart(savedCart);
+          console.log('✅ Cart loaded:', savedCart.length, 'items');
+        }
+      } catch (error) {
+        console.log('No saved cart found or error loading cart:', error);
+      } finally {
+        setCartLoaded(true);
+      }
+    };
+    loadCart();
+  }, []);
+
+  // ✅ Save cart to storage whenever it changes
+  useEffect(() => {
+    const saveCart = async () => {
+      if (!cartLoaded) return;
+      try {
+        await window.storage.set('shopping-cart', JSON.stringify(cart));
+        console.log('💾 Cart saved:', cart.length, 'items');
+      } catch (error) {
+        console.error('Error saving cart:', error);
+      }
+    };
+    saveCart();
+  }, [cart, cartLoaded]);
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
@@ -44,20 +88,29 @@ const ShopMate = () => {
     setLoading(true);
     setShowWelcome(false);
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/products?q=${encodeURIComponent(query)}`);
+      const url = `${API_URL}/products?q=${encodeURIComponent(query)}`;
+      console.log('🔍 Fetching from:', url);
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
       const data = await response.json();
       const fetchedProducts = data.products || [];
       setProducts(fetchedProducts);
       setSummary(data.summary || 'Search complete!');
+      
+      console.log('✅ Found', fetchedProducts.length, 'products');
     } catch (error) {
-      console.error('Error:', error);
-      setSummary('Unable to fetch results. Please try again.');
+      console.error('Search Error:', error);
+      setSummary(`Unable to fetch results. Error: ${error.message}. Make sure your backend is running at ${API_URL}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Make sure filter panel always changes the list
   const filteredProducts = products.filter(p => {
     if (p.price < filters.minPrice || p.price > filters.maxPrice) return false;
     if (p.rating < filters.minRating) return false;
@@ -94,54 +147,70 @@ const ShopMate = () => {
     setShowWelcome(true);
   };
 
-  const addToCart = (product) => {
-    const existingItem = cart.find(item => item.id === product.id);
-    if (existingItem) {
-      setCart(cart.map(item =>
-        item.id === product.id
-          ? { ...item, quantity: item.quantity + 1 }
-          : item
-      ));
-    } else {
-      setCart([...cart, { ...product, quantity: 1 }]);
+const addToCart = async (product) => {
+    if (!isSignedIn) {
+      alert("Please sign in to add items to cart");
+      return;
+    }
+
+    try {
+      await addItemMutation({
+        id: product.id,
+        productId: product.id,
+        title: product.title,
+        name: product.title,
+        price: product.price,
+        quantity: 1,
+        image: product.image,
+        link: product.link,
+        store: product.store,
+        rating: product.rating,
+      });
+    } catch (error) {
+      console.error("Error adding to cart:", error);
+      alert("Failed to add item to cart");
     }
   };
 
-  const removeFromCart = (productId) => {
-    setCart(cart.filter(item => item.id !== productId));
-  };
-
-  const updateQuantity = (productId, newQuantity) => {
-    if (newQuantity < 1) {
-      removeFromCart(productId);
-    } else {
-      setCart(cart.map(item =>
-        item.id === productId ? { ...item, quantity: newQuantity } : item
-      ));
+  const removeFromCart = async (productId) => {
+    if (!isSignedIn) return;
+    try {
+      await removeItemMutation({ productId });
+    } catch (error) {
+      console.error("Error removing from cart:", error);
     }
   };
 
-  const clearCart = () => setCart([]);
+  const updateQuantity = async (productId, newQuantity) => {
+    if (!isSignedIn) return;
+    try {
+      await updateQuantityMutation({ productId, quantity: newQuantity });
+    } catch (error) {
+      console.error("Error updating quantity:", error);
+    }
+  };
+  const clearCart = async () => {
+    if (!isSignedIn) return;
+    try {
+      await clearCartMutation();
+    } catch (error) {
+      console.error("Error clearing cart:", error);
+    }
+  };
 
   const getTotalPrice = () => cart.reduce((total, item) => total + (item.price * item.quantity), 0);
   const getTotalItems = () => cart.reduce((total, item) => total + item.quantity, 0);
 
-  // ------------------------------------------------------------------
-  // 🟢 NEW: HANDLE CHECKOUT FUNCTION FOR N8N
-  // ------------------------------------------------------------------
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     
-    // Prepare the data structure required by the n8n Webhook
     const checkoutData = {
       items: cart,
       totalAmount: getTotalPrice(),
-      // Pass the placeholder user data needed for the n8n automation
       placeholderUserData: PLACEHOLDER_USER_DATA 
     };
 
     try {
-      // 1. Send the data to the n8n Webhook
       const response = await fetch(N8N_WEBHOOK_URL, {
         method: 'POST',
         headers: {
@@ -150,33 +219,26 @@ const ShopMate = () => {
         body: JSON.stringify(checkoutData),
       });
 
-      // 2. The n8n workflow executes and returns the final HTML Handover page.
       if (response.ok) {
-        // Read the HTML content as text
         const htmlContent = await response.text();
         
-        // 3. Open a new window and write the HTML directly into it.
         const newWindow = window.open('', '_blank');
         if (newWindow) {
           newWindow.document.write(htmlContent);
           newWindow.document.close();
-          // Hide the cart and clear it as the checkout process has begun
           setShowCart(false);
           clearCart(); 
         } else {
           alert('Could not open a new window. Please allow pop-ups.');
         }
-
       } else {
         alert(`Checkout Automation Failed. n8n Status: ${response.status}. Check n8n logs.`);
       }
-
     } catch (error) {
       console.error('Checkout failed to connect to n8n:', error);
       alert('Error connecting to the n8n workflow. Ensure n8n is running and the URL is correct.');
     }
   };
-  // ------------------------------------------------------------------
 
   const formatSummary = (text) => {
     if (!text) return null;
@@ -205,10 +267,10 @@ const ShopMate = () => {
               className="flex items-center gap-3 group focus:outline-none"
             >
               <img 
-  src="/logoicon.png" 
-  alt="Shopping Cart" 
-  className="w-10 h-10 group-hover:scale-110 transition-transform" 
-/>
+                src="/logoicon.png" 
+                alt="Shopping Cart" 
+                className="w-10 h-10 group-hover:scale-110 transition-transform" 
+              />
               <h1 className="text-3xl font-bold text-white group-hover:text-yellow-300 transition-colors">Findlee</h1>
             </button>
             <div className="flex items-center gap-4">
@@ -239,7 +301,7 @@ const ShopMate = () => {
                 Compare
               </button>
              
-           <div className="flex items-center gap-2 px-4 py-2 backdrop-blur-lg rounded-xl font-semibold transition-all text-white">💰Save time, Save Money💸</div>
+              <div className="flex items-center gap-2 px-4 py-2 backdrop-blur-lg rounded-xl font-semibold transition-all text-white">💰Save time, Save Money💸</div>
               <SignedOut>
                 <SignInButton mode="modal">
                   <button className={`flex items-center gap-2 px-6 py-2 backdrop-blur-lg rounded-xl font-semibold transition-all shadow-lg hover:shadow-xl transform hover:scale-105 ${isDarkMode ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-700 hover:to-pink-700' : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700'}`}>
@@ -265,6 +327,7 @@ const ShopMate = () => {
           </div>
         </div>
       </header>
+
       {showCart && (
         <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm" onClick={() => setShowCart(false)}>
           <div 
@@ -281,6 +344,11 @@ const ShopMate = () => {
                   <X className={`w-6 h-6 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`} />
                 </button>
               </div>
+
+
+
+
+              
               {cart.length === 0 ? (
                 <div className="text-center py-12">
                   <ShoppingBag className={`w-16 h-16 mx-auto mb-4 ${isDarkMode ? 'text-gray-600' : 'text-gray-300'}`} />
@@ -323,7 +391,6 @@ const ShopMate = () => {
                               </button>
                             </div>
                             <div className="mt-2">
-                              {/* FIX: Use item.link instead of undefined product.link */}
                               <a
                                 href={item.link} 
                                 target="_blank"
@@ -344,15 +411,60 @@ const ShopMate = () => {
                       <span className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-800'}`}>Total:</span>
                       <span className="text-2xl font-bold text-purple-600 dark:text-purple-400">₹{getTotalPrice().toLocaleString('en-IN')}</span>
                     </div>
-                    {/* 🟢 NEW: PROCEED TO CHECKOUT BUTTON */}
-                    <button 
-                        onClick={handleCheckout} 
-                        className="w-full py-3 mb-3 rounded-xl font-semibold transition-all bg-green-600 text-white hover:bg-green-700 flex items-center justify-center gap-2"
-                        disabled={getTotalItems() === 0}
-                    >
-                        Proceed to Checkout ({getTotalItems()}) <ArrowRight className="w-5 h-5" />
-                    </button>
-                    {/* END NEW BUTTON */}
+                    
+
+                   <button
+  onClick={async () => {
+    if (!cart || cart.length === 0) {
+      alert('Your cart is empty — add some items first.');
+      return;
+    }
+
+    const lines = [];
+    lines.push('🛒 Findlee — Shared Cart');
+    lines.push('');
+
+    cart.forEach((item, i) => {
+      // Fix links that contain spaces
+      let safeLink = item.link ? item.link.replace(/\s/g, '%20') : null;
+
+      lines.push(`${i + 1}. ${item.title}`);
+      lines.push(`   Price: ₹${Number(item.price).toLocaleString('en-IN')}`);
+      lines.push(`   Quantity: ${item.quantity}`);
+      if (item.store) lines.push(`   Store: ${item.store}`);
+      if (safeLink) lines.push(`   Link: ${safeLink}`);
+      lines.push('');
+    });
+
+    lines.push(`Total Items: ${cart.reduce((t, x) => t + x.quantity, 0)}`);
+    lines.push(
+      `Total Price: ₹${cart
+        .reduce((t, x) => t + x.price * x.quantity, 0)
+        .toLocaleString('en-IN')}`
+    );
+
+    const text = lines.join('\n');
+
+    try {
+      await navigator.clipboard.writeText(text);
+      alert(
+        '✅ Cart copied to clipboard! You can now paste it into WhatsApp, email, or anywhere else.'
+      );
+    } catch (err) {
+      console.error('Clipboard copy failed:', err);
+      alert('Could not copy automatically — displaying cart text instead.');
+      const w = window.open('', '_blank');
+      if (w) w.document.write(`<pre>${text.replace(/</g, '&lt;')}</pre>`);
+    }
+  }}
+  className="w-full py-3 mb-3 rounded-xl font-semibold transition-all bg-blue-600 text-white hover:bg-blue-700 flex items-center justify-center gap-2"
+  disabled={getTotalItems() === 0}
+>
+  Share Cart ({getTotalItems()}) <ArrowRight className="w-5 h-5" />
+</button>
+
+
+
                     <button 
                       onClick={clearCart}
                       className={`w-full py-3 mb-3 rounded-xl font-semibold transition-all ${isDarkMode ? 'bg-gray-700 text-white hover:bg-gray-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
@@ -366,6 +478,7 @@ const ShopMate = () => {
           </div>
         </div>
       )}
+
       {showWelcome && (
         <div className="max-w-4xl mx-auto px-4 py-8 text-center animate-fade-in">
           <h2 className="text-5xl font-bold text-white mb-6">
@@ -374,27 +487,28 @@ const ShopMate = () => {
           <p className="text-xl text-white/90 mb-8">
             Search across Amazon, Flipkart, eBay, and more in one place
           </p>
-         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-  <div className={`backdrop-blur-lg rounded-2xl p-6 border transition-all duration-300 transform hover:scale-105 hover:shadow-2xl cursor-pointer ${isDarkMode ? 'bg-gray-800/50 border-gray-700 hover:bg-gray-800/70' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}>
-    <TrendingUp className="w-12 h-12 text-yellow-300 mx-auto mb-4 transition-transform duration-300 group-hover:rotate-12" />
-    <h3 className="text-white font-semibold text-lg mb-2">Best Prices</h3>
-    <p className="text-white/80 text-sm">Compare prices across all major stores</p>
-  </div>
-  
-  <div className={`backdrop-blur-lg rounded-2xl p-6 border transition-all duration-300 transform hover:scale-105 hover:shadow-2xl cursor-pointer ${isDarkMode ? 'bg-gray-800/50 border-gray-700 hover:bg-gray-800/70' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}>
-    <Shield className="w-12 h-12 text-green-300 mx-auto mb-4 transition-transform duration-300 group-hover:scale-110" />
-    <h3 className="text-white font-semibold text-lg mb-2">Verified Deals</h3>
-    <p className="text-white/80 text-sm">Only authentic offers and discounts</p>
-  </div>
-  
-  <div className={`backdrop-blur-lg rounded-2xl p-6 border transition-all duration-300 transform hover:scale-105 hover:shadow-2xl cursor-pointer ${isDarkMode ? 'bg-gray-800/50 border-gray-700 hover:bg-gray-800/70' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}>
-    <Zap className="w-12 h-12 text-blue-300 mx-auto mb-4 transition-transform duration-300 group-hover:rotate-12" />
-    <h3 className="text-white font-semibold text-lg mb-2">AI Powered</h3>
-    <p className="text-white/80 text-sm">Smart recommendations just for you</p>
-  </div>
-</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className={`backdrop-blur-lg rounded-2xl p-6 border transition-all duration-300 transform hover:scale-105 hover:shadow-2xl cursor-pointer ${isDarkMode ? 'bg-gray-800/50 border-gray-700 hover:bg-gray-800/70' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}>
+              <TrendingUp className="w-12 h-12 text-yellow-300 mx-auto mb-4 transition-transform duration-300 group-hover:rotate-12" />
+              <h3 className="text-white font-semibold text-lg mb-2">Best Prices</h3>
+              <p className="text-white/80 text-sm">Compare prices across all major stores</p>
+            </div>
+            
+            <div className={`backdrop-blur-lg rounded-2xl p-6 border transition-all duration-300 transform hover:scale-105 hover:shadow-2xl cursor-pointer ${isDarkMode ? 'bg-gray-800/50 border-gray-700 hover:bg-gray-800/70' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}>
+              <Shield className="w-12 h-12 text-green-300 mx-auto mb-4 transition-transform duration-300 group-hover:scale-110" />
+              <h3 className="text-white font-semibold text-lg mb-2">Verified Deals</h3>
+              <p className="text-white/80 text-sm">Only authentic offers and discounts</p>
+            </div>
+            
+            <div className={`backdrop-blur-lg rounded-2xl p-6 border transition-all duration-300 transform hover:scale-105 hover:shadow-2xl cursor-pointer ${isDarkMode ? 'bg-gray-800/50 border-gray-700 hover:bg-gray-800/70' : 'bg-white/10 border-white/20 hover:bg-white/20'}`}>
+              <Zap className="w-12 h-12 text-blue-300 mx-auto mb-4 transition-transform duration-300 group-hover:rotate-12" />
+              <h3 className="text-white font-semibold text-lg mb-2">AI Powered</h3>
+              <p className="text-white/80 text-sm">Smart recommendations just for you</p>
+            </div>
+          </div>
         </div>
       )}
+
       <div className="max-w-4xl mx-auto px-4 py-2">
         <div className="flex gap-3">
           <div className="flex-1 relative">
@@ -423,6 +537,7 @@ const ShopMate = () => {
           </button>
         </div>
       </div>
+
       {showFilters && (
         <div className="max-w-7xl mx-auto px-4 mb-8">
           <div className={`backdrop-blur-lg rounded-2xl p-6 border transition-colors ${isDarkMode ? 'bg-gray-800/50 border-gray-700' : 'bg-white/10 border-white/20'}`}>
@@ -566,10 +681,8 @@ const ShopMate = () => {
                     )}
                   </div>
                   <div className="flex items-baseline gap-2 mb-2">
-                    {/* FIX: Use 'en-IN' for proper Rupee formatting */}
                     <span className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-800'}`}>₹{product.price.toLocaleString('en-IN')}</span>
                     {product.originalPrice > 0 && product.originalPrice !== product.price && (
-                       /* FIX: Use 'en-IN' for proper Rupee formatting */
                       <span className={`text-sm line-through ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>₹{product.originalPrice.toLocaleString('en-IN')}</span>
                     )}
                   </div>
@@ -607,6 +720,7 @@ const ShopMate = () => {
           )}
         </div>
       )}
+
       {loading && (
         <div className="max-w-7xl mx-auto px-4 py-16">
           <div className="text-center">
@@ -617,18 +731,13 @@ const ShopMate = () => {
       )}
 
       <footer className={`${isDarkMode ? 'bg-gray-800/50 border-gray-700' : 'bg-white/10 border-white/20'} backdrop-blur-lg border-t py-6`}>
-          <div className="max-w-7xl mx-auto px-4 text-center text-white/80 text-sm">
-            <p>© 2025 Findlee - Save Time, Save Money | Powered by AI</p>
-            <a href='https://www.instagram.com/findl_ee/'> Instagram: Findl_ee</a>
-          </div>
+        <div className="max-w-7xl mx-auto px-4 text-center text-white/80 text-sm">
+          <p>© 2025 Findlee - Save Time, Save Money | Powered by AI</p>
+          <a href='https://www.instagram.com/findl_ee/' target="_blank" rel="noopener noreferrer"> Instagram: Findl_ee</a>
+        </div>
       </footer>
-      
     </div>
-
-    
   );
-  
 };
-
 
 export default ShopMate;
